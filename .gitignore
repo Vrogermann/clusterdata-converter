@@ -1,0 +1,5 @@
+output/
+*.csv
+node_modules/
+db.json
+launch.json
