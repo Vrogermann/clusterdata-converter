@@ -4,15 +4,17 @@
   "description": "a google cluster data v2 converter to Bag-of-Tasks format",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "node --max-old-space-size=8192 index.js --tracePath ../clusterdata-2011-2/ --outputPath ./output  --skipJobs --skipTasks  --maxTaskFiles 500 --maxUsageFiles 500 --enableLogFile"
   },
   "author": "vrogermann",
   "license": "ISC",
   "dependencies": {
-    "csv": "^6.0.5",
-    "expose-gc": "^1.0.0",
-    "lowdb": "^3.0.0",
-    "papaparse": "^5.3.2"
+    "ansi-colors": "^4.1.1",
+    "cli-progress": "^3.10.0",
+    "level": "^8.0.0",
+    "n-readlines": "^1.0.1",
+    "yargs": "^17.5.0"
   },
   "type": "module"
 }
