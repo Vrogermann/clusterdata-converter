@@ -1,14 +1,13 @@
-import { fstat, readdirSync, readFileSync, unlinkSync } from "fs"
-import zlib from "zlib"
+import { fstat, readdirSync, readFileSync, unlinkSync, appendFileSync } from "fs"
 import cliProgress from "cli-progress"
 import colors from 'ansi-colors'
 import level, { Level } from "level"
 import LineByLine from "n-readlines"
-import { writeFileSync } from "fs"
-import gc from "expose-gc"
 
+import yargs from 'yargs'
+import { hideBin } from 'yargs/helpers'
 const db = new Level("./database")
-
+let logFile
 
 const jobCsvFields = [
     "timestamp",
@@ -37,43 +36,89 @@ const taskCsvFields = [
 ]
 
 const taskUsageCsvFields = [
-    "start time of the measurement period",
-    "end time of the measurement period",
-    "job ID",
-    "task index",
-    "machine ID",
-    "mean CPU usage rate",
-    "canonical memory usage",
-    "assigned memory usage",
-    "unmapped page cache memory usage",
-    "total page cache memory usage",
-    "maximum memory usage",
-    "mean disk I/O time",
-    "mean local disk space used",
-    "maximum CPU usage",
-    "maximum disk IO time",
-    "cycles per instruction",
-    "memory accesses per instruction",
-    "sample portion",
-    "aggregation type",
-    "sampled CPU usage"
+    "startTime",
+    "endTime",
+    "jobID",
+    "taskIndex",
+    "machineID",
+    "meanCPU",
+    "canonicalMemory",
+    "assignedMemory",
+    "unmappedCache",
+    "totalCache",
+    "maxMemory",
+    "meanDiskTime",
+    "meanDiskSpace",
+    "maximumCPU",
+    "maximumDiskTime",
+    "CPI",
+    "MAPI",
+    "samplePortion",
+    "aggregationType",
+    "sampledCPU"
 ]
-let verbose = false
 
-async function main(googleTracePath, outputPath, skipJobs, skipTasks) {
+async function main(googleTracePath, outputPath, args) {
+    if (args.help || !args.tracePath || !args.outputPath) {
+        console.log(`
+Google Cluster data to Bag-of-Tasks conversion tool
+Required arguments:
+    --tracePath {location} | specify google cluster data trace location
+    --outputPath {location} | specify a folder for the output csv file
+Optional arguments:
+    --enableLogFile | enable logging to log.txt file
+    --skipJobs | skips the job_events processing step
+    --skipTasks | skips the task_events processing step
+    --skipUsage | skips the task_usage processing step
+    --initialUsage {number} | specify the file number from the task_usage to start processing from
+    --initialJob {number} | specify the file number from the job_events to start processing from
+    --initialTask {number} | specify the file number from the task_events to start processing from
+    --maxJobFiles {number} | specify the max number of files from job_events to process
+    --maxTaskFiles {number} | specify the max number of files from taskevents to process
+    --maxUsageFiles {number} | specify the max number of files from task_usage to process
+    --help | shows this message
+        `)
+        return
+    }
     await db.open()
-    if (!skipJobs) {
+    if (!args.skipJobs) {
         console.log("Step 1: Processing Job files")
-        await readJobFiles(googleTracePath)
+        await readJobFiles(googleTracePath, args.initialJob, args.enableLogFile, args.maxJobFiles)
         console.log("Step 2: Cleaning up invalid jobs")
         await cleanInvalidJobs()
     }
-    if (!skipTasks) {
-        console.log("Step 3: Reading Task Files")
-        await readTaskFiles(googleTracePath)
+    if (!args.skipTasks) {
+        console.log("Step 3: Reading Task files")
+        await readTaskFiles(googleTracePath, args.initialTask, args.enableLogFile, args.maxTaskFiles)
     }
-    await readTaskUsage(googleTracePath)
+    if (!args.skipUsage) {
+        console.log("Step 4: Reading Task usage files")
+        await readTaskUsage(googleTracePath, args.initialUsage, args.enableLogFile, args.maxUsageFiles)
+    }
+    console.log("Step 5: Writing output File")
+    await writeConvertedCsv(outputPath, args.enableLogFile)
+    await db.close()
     return
+}
+
+function writeToLogFileIfEnabled(message, verbose) {
+    if (!verbose) return
+    appendFileSync('./log.txt', message + "\n")
+}
+
+async function writeConvertedCsv(outputPath) {
+    const keys = await db.keys().all()
+    const jobBar = new cliProgress.SingleBar({
+        format: 'Writing BoT file |' + colors.cyan('{bar}') + '| {percentage}% || {value}/{total}'
+    }, cliProgress.Presets.shades_classic);
+    jobBar.start(keys.length, 0)
+    let line;
+    for (let currentJob = 0; currentJob < keys.length; currentJob++) {
+        const data = await db.get(keys[currentJob])
+        const job = JSON.parse(data)
+        //appendFileSync(outputPath + 'converted.csv', line)
+        jobBar.update(currentJob + 1)
+    }
 }
 
 async function cleanInvalidJobs() {
@@ -98,16 +143,19 @@ async function cleanInvalidJobs() {
 }
 
 
-async function readJobFiles(googleTracePath) {
+async function readJobFiles(googleTracePath, initialJobFile, maxFiles) {
+    writeToLogFileIfEnabled("reading job_events directory", enableLog)
     let directory = readdirSync(googleTracePath + "job_events")
+    if (maxFiles)
+        directory = directory.slice(0, maxFiles)
     const multibar = new cliProgress.MultiBar({
         clearOnComplete: false,
         hideCursor: true,
         format: '{barName} [{bar}] {percentage}% | ETA: {eta}s | {value}/{total}'
 
     }, cliProgress.Presets.shades_grey);
-    const fileBar = multibar.create(directory.length, 1)
-    for (let currentFile = 0; currentFile < directory.length; currentFile++) {
+    const fileBar = multibar.create(directory.length, initialJobFile || 0)
+    for (let currentFile = initialJobFile || 0; currentFile < directory.length; currentFile++) {
         fileBar.update(currentFile + 1, { barName: "All Job files progress:" })
         let result = readGoogleTrace(
             googleTracePath,
@@ -208,16 +256,20 @@ async function readJobFiles(googleTracePath) {
     fileBar.stop()
 }
 
-async function readTaskFiles(googleTracePath) {
+async function readTaskFiles(googleTracePath, initialTaskFile, enableLog, maxFiles) {
+    writeToLogFileIfEnabled("reading task_events directory", enableLog)
     let directory = readdirSync(googleTracePath + "task_events")
+    if (maxFiles)
+        directory = directory.slice(0, maxFiles)
     const multibar = new cliProgress.MultiBar({
         clearOnComplete: false,
         hideCursor: true,
         format: '{barName} [{bar}] {percentage}% | ETA: {eta}s | {value}/{total}'
 
     }, cliProgress.Presets.shades_grey);
-    const fileBar = multibar.create(directory.length, 0)
-    for (let currentFile = 0; currentFile < directory.length; currentFile++) {
+    const fileBar = multibar.create(directory.length, initialTaskFile || 0)
+    for (let currentFile = initialTaskFile || 0; currentFile < directory.length; currentFile++) {
+        writeToLogFileIfEnabled("reading contents of file " + currentFile, enableLog)
         fileBar.update(currentFile, { barName: "All Task files progress:" })
         let result = readGoogleTrace(
             googleTracePath,
@@ -236,9 +288,8 @@ async function readTaskFiles(googleTracePath) {
             } catch (error) {
                 job = undefined;
             }
-
+            const index = Number(event['taskIndex'])
             if (job && event['event type'] === '0') {
-                const index = Number(event['taskIndex'])
                 if (event["CPUcores"]) {
                     job.averageTaskCpuCores = job.averageTaskCpuCores ? (job.averageTaskCpuCores * job.cpuCoresSampleSize + Number(event["CPUcores"])) / (job.cpuCoresSampleSize + 1) : Number(event["CPUcores"])
                     job.cpuCoresSampleSize = job.cpuCoresSampleSize ? job.cpuCoresSampleSize + 1 : 1
@@ -256,7 +307,22 @@ async function readTaskFiles(googleTracePath) {
                 db.put(jobId, JSON.stringify(job))
             } else
                 if (job) {
+
+                    let timestamp
                     switch (event["event type"]) {
+                        // task scheduled
+                        case "1":
+
+                            timestamp = Number(event["timestamp"])
+                            // ignore tasks that started before the trace period (timestamp < 600 seconds)
+                            if (timestamp > 600000000) {
+                                if (!job.taskTimestamps) {
+                                    job.taskTimestamps = {}
+                                }
+                                job.taskTimestamps[index] = timestamp
+                                db.put(jobId, JSON.stringify(job))
+                            }
+                            break;
                         // task evicted
                         case "2":
                             job.taskEvictions = job.taskEvictions ? job.taskEvictions + 1 : 1
@@ -271,7 +337,14 @@ async function readTaskFiles(googleTracePath) {
                             break
                         // finished
                         case "4":
-                            job.tasksCompleted ? job.tasksCompleted + 1 : 1
+                            timestamp = Number(event["timestamp"])
+                            if (job.taskTimestamps && job.taskTimestamps[index] && timestamp > 600000000) {
+                                job.tasksCompleted = job.tasksCompleted ? job.tasksCompleted + 1 : 1
+                                let taskDuration = timestamp - job.taskTimestamps[index]
+                                job.averageTaskDuration = job.averageTaskDuration ? (job.averageTaskDuration * job.taskDurationSampleSize + taskDuration) / (job.taskDurationSampleSize + 1) : taskDuration
+                                job.taskDurationSampleSize = job.taskDurationSampleSize ? job.taskDurationSampleSize + 1 : 1
+                                delete job.taskTimestamps[index]
+                            }
                             db.put(jobId, JSON.stringify(job))
                             break
                         // killed
@@ -285,19 +358,24 @@ async function readTaskFiles(googleTracePath) {
         multibar.remove(taskBar)
     }
     fileBar.stop()
+    return
 }
 
-async function readTaskUsage(googleTracePath) {
+async function readTaskUsage(googleTracePath, initialUsageFile, enableLog, maxFiles) {
+    writeToLogFileIfEnabled("reading task_sage directory", enableLog)
     let directory = readdirSync(googleTracePath + "task_usage")
+    if (maxFiles)
+        directory = directory.slice(0, maxFiles)
     const multibar = new cliProgress.MultiBar({
         clearOnComplete: false,
         hideCursor: true,
         format: '{barName} [{bar}] {percentage}% | ETA: {eta}s | {value}/{total}'
 
     }, cliProgress.Presets.shades_grey);
-    const fileBar = multibar.create(directory.length, 0)
-    for (let currentFile = 19; currentFile < directory.length; currentFile++) {
+    const fileBar = multibar.create(directory.length, initialUsageFile || 0)
+    for (let currentFile = initialUsageFile || 0; currentFile < directory.length; currentFile++) {
         fileBar.update(currentFile, { barName: "All Task Usage files progress:" })
+        writeToLogFileIfEnabled("reading contents of file " + currentFile, enableLog)
         let result = readGoogleTrace(
             googleTracePath,
             "task_usage",
@@ -308,7 +386,7 @@ async function readTaskUsage(googleTracePath) {
         for (let currentUsageReport = 0; currentUsageReport < result.length; currentUsageReport++) {
             taskBar.update(currentUsageReport, { barName: "Current Task Usage File (" + currentFile + ") progress:" })
             let usageReport = result[currentUsageReport]
-            let jobId = usageReport['job ID']
+            let jobId = usageReport['jobID']
             let job;
             try {
                 job = JSON.parse(await db.get(jobId))
@@ -317,74 +395,54 @@ async function readTaskUsage(googleTracePath) {
             }
 
             if (job) {
-                job.averageTaskCpuUsage = job.averageTaskCpuUsage ? (job.averageTaskCpuUsage * job.taskCpuUsageSampleSize + Number(usageReport["mean CPU usage rate"])) / (job.taskCpuUsageSampleSize + 1) : Number(usageReport["mean CPU usage rate"])
-                job.taskCpuUsageSampleSize = job.taskCpuUsageSampleSize ? job.taskCpuUsageSampleSize + 1 : 1
+                if (usageReport["meanCPU"]) {
+                    job.averageTaskCpuUsage = job.averageTaskCpuUsage ? (job.averageTaskCpuUsage * job.taskCpuUsageSampleSize + Number(usageReport["meanCPU"])) / (job.taskCpuUsageSampleSize + 1) : Number(usageReport["meanCPU"])
+                    job.taskCpuUsageSampleSize = job.taskCpuUsageSampleSize ? job.taskCpuUsageSampleSize + 1 : 1
+                }
+                if (usageReport["CPI"]) {
+                    job.averageTaskCPI = job.averageTaskCPI ? (job.averageTaskCPI * job.taskCpiSampleSize + Number(usageReport["CPI"])) / (job.taskCpiSampleSize + 1) : Number(usageReport["CPI"])
+                    job.taskCpiSampleSize = job.taskCpiSampleSize ? job.taskCpiSampleSize + 1 : 1
+                }
 
-                job.averageTaskCPI = job.averageTaskCPI ? (job.averageTaskCPI * job.taskCpiSampleSize + Number(usageReport["cycles per instruction (CPI)"])) / (job.taskCpiSampleSize + 1) : Number(usageReport["cycles per instruction (CPI)"])
-                job.taskCpiSampleSize = job.taskCpiSampleSize ? job.taskCpiSampleSize + 1 : 1
                 db.put(jobId, JSON.stringify(job))
             }
+            if(!currentFile % 1000)
+                multibar.update()
         }
         multibar.remove(taskBar)
     }
     fileBar.stop()
 }
 
-function parseCsv(file, headers) {
-    let lines = []
-    file.split(/\r?\n/).forEach((line, index) => {
-        lines.push(parseCsvLine(line, headers))
-    });
-    return lines
-}
 
 function parseCsvLine(line, headers) {
     let item = {}
-    line.split(',').forEach((value, index) => {
-        item[headers[index]] = value
-    })
+    let info = line.split(',')
+    for (let currentInfo = 0; currentInfo < info.length; currentInfo++)
+
+        item[headers[currentInfo]] = info[currentInfo]
     return item
 }
 
 function readGoogleTrace(basePath, folder, filename, columns) {
     const uncompressedRegex = /.+\.csv(?!\.gz)/
     const compressedRegex = /.+\.csv\.gz(?!\.)/
-    global.gc()
-    if (compressedRegex.test(filename)) {
-        let csv = zlib
-            .gunzipSync(readFileSync(basePath + folder + "/" + filename), 'utf-8')
+    if (uncompressedRegex.test(filename)) {
 
-                const extractedFilePath = basePath + folder + "/" + filename + ".extracted.csv"
-                writeFileSync(extractedFilePath, csv)
-                const liner = new LineByLine(extractedFilePath);
-                let currentLine;
-                let result = []
-                while (currentLine = liner.next()) {
-                    result.push(parseCsvLine(currentLine.toString(), columns))
-                }
-                unlinkSync(extractedFilePath)
-                return result
-
-
+        const liner = new LineByLine(basePath + folder + "/" + filename);
+        let currentLine;
+        let result = []
+        while (currentLine = liner.next()) {
+            result.push(parseCsvLine(currentLine.toString(), columns))
+        }
+        return result
     }
-    else if (uncompressedRegex.test(filename)) {
-        let csv = readFileSync(basePath + folder + "/" + filename, 'utf-8')
-        return parseCsv(csv, columns)
-    }
-    throw Error(`Unsported file extension on file ${filename}, must be csv or .gz`)
+    console.log(`Unsported file extension on file ${filename}, must be .csv `)
+    return [];
 }
 
-let args = process.argv
 
-if (args.length > 3) {
-    let googleTracePath = args[2]
-    let outputPath = args[3]
-    if (args.filter((arg) => arg === "--verbose").length > 0) verbose = true
-    let skipJobs = args.filter((arg) => arg === "--skipJobs").length > 0
-    let skipTasks = args.filter((arg) => arg === "--skipTasks").length > 0
-    main(googleTracePath, outputPath, skipJobs, skipTasks)
-} else {
-    console.log(
-        "Please inform google trace path and desired output path as arguments before running."
-    )
-}
+let args = yargs(hideBin(process.argv)).argv
+main(args.tracePath, args.outputPath, args)
+
+
