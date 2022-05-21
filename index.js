@@ -1,4 +1,4 @@
-import { fstat, readdirSync, readFileSync, unlinkSync, appendFileSync } from "fs"
+import { fstat, readdirSync, readFileSync, unlinkSync, appendFileSync, openSync, statSync } from "fs"
 import cliProgress from "cli-progress"
 import colors from 'ansi-colors'
 import level, { Level } from "level"
@@ -372,20 +372,24 @@ async function readTaskUsage(googleTracePath, initialUsageFile, enableLog, maxFi
         format: '{barName} [{bar}] {percentage}% | ETA: {eta}s | {value}/{total}'
 
     }, cliProgress.Presets.shades_grey);
-    const fileBar = multibar.create(directory.length, initialUsageFile || 0)
+    const fileBar = multibar.create(directory.length, initialUsageFile || 0, { barName: "All Task Usage files progress:" })
     for (let currentFile = initialUsageFile || 0; currentFile < directory.length; currentFile++) {
-        fileBar.update(currentFile, { barName: "All Task Usage files progress:" })
+
         writeToLogFileIfEnabled("reading contents of file " + currentFile, enableLog)
-        let result = readGoogleTrace(
+        let generator = lineGenerator(
             googleTracePath,
             "task_usage",
             directory[currentFile],
             taskUsageCsvFields,
         )
-        const taskBar = multibar.create(result.length, 0)
-        for (let currentUsageReport = 0; currentUsageReport < result.length; currentUsageReport++) {
-            taskBar.update(currentUsageReport, { barName: "Current Task Usage File (" + currentFile + ") progress:" })
-            let usageReport = result[currentUsageReport]
+        const taskBar = multibar.create(getFileSize(googleTracePath, "task_usage", directory[currentFile]),
+            0,
+            { barName: "Current Task File (" + directory[currentFile] + ") progress:" })
+
+        let nextLine = generator.next()
+        while (nextLine.value?.content) {
+            let usageReport = nextLine.value.content
+
             let jobId = usageReport['jobID']
             let job;
             try {
@@ -406,10 +410,11 @@ async function readTaskUsage(googleTracePath, initialUsageFile, enableLog, maxFi
 
                 db.put(jobId, JSON.stringify(job))
             }
-            if(!currentFile % 1000)
-                multibar.update()
+            taskBar.increment(nextLine.value.size)
+            nextLine = generator.next()
         }
         multibar.remove(taskBar)
+        fileBar.increment()
     }
     fileBar.stop()
 }
@@ -441,6 +446,29 @@ function readGoogleTrace(basePath, folder, filename, columns) {
     return [];
 }
 
+function* lineGenerator(basePath, folder, filename, columns) {
+    const uncompressedRegex = /.+\.csv(?!\.gz)/
+    if (uncompressedRegex.test(filename)) {
+
+        const liner = new LineByLine(basePath + folder + "/" + filename);
+        let currentLine;
+        while (currentLine = liner.next()) {
+            yield {
+                content: parseCsvLine(currentLine.toString(), columns),
+                size: currentLine.byteLength
+            }
+        }
+        return
+    }
+    console.log(`Unsported file extension on file ${filename}, must be .csv `)
+    return;
+}
+
+function getFileSize(basePath, folder, filename) {
+    const fileDescriptor = statSync(basePath + folder + "/" + filename)
+    return fileDescriptor.size
+
+}
 
 let args = yargs(hideBin(process.argv)).argv
 main(args.tracePath, args.outputPath, args)
