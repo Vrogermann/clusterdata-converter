@@ -106,18 +106,20 @@ function writeToLogFileIfEnabled(message, verbose) {
     appendFileSync('./log.txt', message + "\n")
 }
 
-async function writeConvertedCsv(outputPath) {
+async function writeConvertedCsv(outputPath, processorFrequency=3.6) {
     const keys = await db.keys().all()
     const jobBar = new cliProgress.SingleBar({
-        format: 'Writing BoT file |' + colors.cyan('{bar}') + '| {percentage}% || {value}/{total}'
+        format: 'Writing BoT file |' + colors.cyan('{bar}') + '| {percentage}% || {value}/{total}  | ETA: {eta}s'
     }, cliProgress.Presets.shades_classic);
     jobBar.start(keys.length, 0)
-    let line;
+    let line = "user,jobId,taskNumber,taskLength,taskTime,taskDiskUsage,taskRam,averageTaskCpu,averageTaskLength,taskCores,schedulingClass,jobCreationTime,jobStartTime,jobEndTime,executionAttempts,evictionAmounts\n";
+    appendFileSync(outputPath + 'converted.csv', line)
     for (let currentJob = 0; currentJob < keys.length; currentJob++) {
         const data = await db.get(keys[currentJob])
         const job = JSON.parse(data)
-        //appendFileSync(outputPath + 'converted.csv', line)
-        jobBar.update(currentJob + 1)
+        line = `${job.userName || ''},${job.numberOfTasks ||''},${job.averageTaskCPI && job.averageTaskDuration ? Math.round(processorFrequency / job.averageTaskCPI * job.averageTaskDuration) : '' },${job.averageTaskDuration || ''},${job.averageTaskDiskSpace || ''},${job.averageTaskRam || ''},${job.averageTaskCpuCores || ''},${job.schedulingClass || ''},${job.submitionTime || ''},${job.scheduleTime || ''},${job.finishTime || ''},${job.executionAttempts || ''},${job.evictionNumber || ''}\n`
+        appendFileSync(outputPath + 'converted.csv', line)
+        jobBar.increment()
     }
 }
 
