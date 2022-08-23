@@ -112,12 +112,12 @@ async function writeConvertedCsv(outputPath, processorFrequency=3.6) {
         format: 'Writing BoT file |' + colors.cyan('{bar}') + '| {percentage}% || {value}/{total}  | ETA: {eta}s'
     }, cliProgress.Presets.shades_classic);
     jobBar.start(keys.length, 0)
-    let line = "user,jobId,taskNumber,taskLength,taskTime,taskDiskUsage,taskRam,averageTaskCpu,averageTaskLength,taskCores,schedulingClass,jobCreationTime,jobStartTime,jobEndTime,executionAttempts,evictionAmounts\n";
+    let line = "user,jobId,taskNumber,taskLength,taskTime,taskDiskUsage,taskRam,averageTaskCpu,taskCores,schedulingClass,jobCreationTime,jobStartTime,jobEndTime,executionAttempts,evictionAmounts\n";
     appendFileSync(outputPath + 'converted.csv', line)
     for (let currentJob = 0; currentJob < keys.length; currentJob++) {
         const data = await db.get(keys[currentJob])
         const job = JSON.parse(data)
-        line = `${job.userName || ''},${job.numberOfTasks ||''},${job.averageTaskCPI && job.averageTaskDuration ? Math.round(processorFrequency / job.averageTaskCPI * job.averageTaskDuration) : '' },${job.averageTaskDuration || ''},${job.averageTaskDiskSpace || ''},${job.averageTaskRam || ''},${job.averageTaskCpuCores || ''},${job.schedulingClass || ''},${job.submitionTime || ''},${job.scheduleTime || ''},${job.finishTime || ''},${job.executionAttempts || ''},${job.evictionNumber || ''}\n`
+        line = `${job.userName || ''},${job.id || ''},${job.numberOfTasks ||''},${job.averageTaskCPI && job.averageTaskDuration ? Math.round(processorFrequency / job.averageTaskCPI * job.averageTaskDuration) : '' },${job.averageTaskDuration || ''},${job.averageTaskDiskSpace || ''},${job.averageTaskRam || ''},${job.averageTaskCpuUsage},${job.averageTaskCpuCores || ''},${job.schedulingClass || ''},${job.submitionTime || ''},${job.scheduleTime || ''},${job.finishTime || ''},${job.executionAttempts || ''},${job.evictionNumber || ''}\n`
         appendFileSync(outputPath + 'converted.csv', line)
         jobBar.increment()
     }
