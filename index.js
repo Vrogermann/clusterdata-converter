@@ -83,6 +83,7 @@ Optional arguments:
     await db.open()
     if (!args.skipJobs) {
         console.log("Step 1: Processing Job files")
+        console.log(args.maxJobFiles)
         await readJobFiles(googleTracePath, args.initialJob, args.enableLogFile, args.maxJobFiles)
         console.log("Step 2: Cleaning up invalid jobs")
         await cleanInvalidJobs()
@@ -112,12 +113,12 @@ async function writeConvertedCsv(outputPath, processorFrequency=3.6) {
         format: 'Writing BoT file |' + colors.cyan('{bar}') + '| {percentage}% || {value}/{total}  | ETA: {eta}s'
     }, cliProgress.Presets.shades_classic);
     jobBar.start(keys.length, 0)
-    let line = "user,jobId,taskNumber,taskLength,taskTime,taskDiskUsage,taskRam,averageTaskCpu,taskCores,schedulingClass,jobCreationTime,jobStartTime,jobEndTime,executionAttempts,evictionAmounts\n";
+    let line = "user,jobId,taskAmount,taskLength,taskTime,taskDiskUsage,taskRam,averageTaskCpu,taskCores,schedulingClass,jobCreationTime,jobStartTime,jobEndTime,executionAttempts,evictionAmounts\n";
     appendFileSync(outputPath + 'converted.csv', line)
     for (let currentJob = 0; currentJob < keys.length; currentJob++) {
         const data = await db.get(keys[currentJob])
         const job = JSON.parse(data)
-        line = `${job.userName || ''},${job.id || ''},${job.numberOfTasks ||''},${job.averageTaskCPI && job.averageTaskDuration ? Math.round(processorFrequency / job.averageTaskCPI * job.averageTaskDuration) : '' },${job.averageTaskDuration || ''},${job.averageTaskDiskSpace || ''},${job.averageTaskRam || ''},${job.averageTaskCpuUsage},${job.averageTaskCpuCores || ''},${job.schedulingClass || ''},${job.submitionTime || ''},${job.scheduleTime || ''},${job.finishTime || ''},${job.executionAttempts || ''},${job.evictionNumber || ''}\n`
+        line = `${job.userName || ''},${job.id || ''},${job.taskAmount ||''},${job.averageTaskCPI && job.averageTaskDuration ? Math.round(processorFrequency / job.averageTaskCPI * job.averageTaskDuration) : '' },${job.averageTaskDuration || ''},${job.averageTaskDiskSpace || ''},${job.averageTaskRam || ''},${job.averageTaskCpuUsage},${job.averageTaskCpuCores || ''},${job.schedulingClass || ''},${job.submitionTime || ''},${job.scheduleTime || ''},${job.finishTime || ''},${job.executionAttempts || ''},${job.evictionNumber || ''}\n`
         appendFileSync(outputPath + 'converted.csv', line)
         jobBar.increment()
     }
@@ -145,7 +146,7 @@ async function cleanInvalidJobs() {
 }
 
 
-async function readJobFiles(googleTracePath, initialJobFile, maxFiles) {
+async function readJobFiles(googleTracePath, initialJobFile, enableLog, maxFiles) {
     writeToLogFileIfEnabled("reading job_events directory", enableLog)
     let directory = readdirSync(googleTracePath + "job_events")
     if (maxFiles)
@@ -304,8 +305,8 @@ async function readTaskFiles(googleTracePath, initialTaskFile, enableLog, maxFil
                     job.averageTaskDiskSpace = job.averageTaskDiskSpace ? (job.averageTaskDiskSpace * job.taskDiskSpaceSampleSize + Number(event["diskSpace"])) / (job.taskDiskSpaceSampleSize + 1) : Number(event["diskSpace"])
                     job.taskDiskSpaceSampleSize = job.taskDiskSpaceSampleSize ? job.taskDiskSpaceSampleSize + 1 : 1
                 }
-                if (!job.numberOfTasks || job.numberOfTasks < index + 1)
-                    job.numberOfTasks = index + 1
+                if (!job.taskAmount || job.taskAmount < index + 1)
+                    job.taskAmount = index + 1
                 db.put(jobId, JSON.stringify(job))
             } else
                 if (job) {

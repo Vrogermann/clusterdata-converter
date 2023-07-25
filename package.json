@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "node --max-old-space-size=8192 index.js --tracePath ../clusterdata-2011-2/ --outputPath ./output  --skipJobs --skipTasks  --skipUsage --maxTaskFiles 500 --maxUsageFiles 500 --enableLogFile"
+    "start": "node --max-old-space-size=8192 index.js --tracePath ../clusterdata-2011-2/ --outputPath ./output   --maxTaskFiles 10 --maxUsageFiles 10 --maxJobFiles 10 --enableLogFile"
   },
   "author": "vrogermann",
   "license": "ISC",
