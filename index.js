@@ -70,6 +70,7 @@ Optional arguments:
     --skipJobs | skips the job_events processing step
     --skipTasks | skips the task_events processing step
     --skipUsage | skips the task_usage processing step
+    --skipValidation | skips the data validation that removes invalid jobs before writing the CSV file
     --initialUsage {number} | specify the file number from the task_usage to start processing from
     --initialJob {number} | specify the file number from the job_events to start processing from
     --initialTask {number} | specify the file number from the task_events to start processing from
@@ -96,11 +97,39 @@ Optional arguments:
         console.log("Step 4: Reading Task usage files")
         await readTaskUsage(googleTracePath, args.initialUsage, args.enableLogFile, args.maxUsageFiles)
     }
-    console.log("Step 5: Writing output File")
+
+    if (!args.skipValidation) {
+        console.log("Step 5: Validating and removing invalid data")
+        await validateData()
+    }
+    console.log("Step 6: Writing output File")
     await writeConvertedCsv(outputPath, args.enableLogFile)
     await db.close()
-    return
+    return 0
 }
+
+async function validateData() {
+    const keys = await db.keys().all()
+    const jobBar = new cliProgress.SingleBar({
+        format: 'Searching for invalid jobs writing CSV file |' + colors.cyan('{bar}') + '| {percentage}% || {value}/{total} || invalid jobs: {invalidJobs}'
+    }, cliProgress.Presets.shades_classic);
+    jobBar.start(keys.length, 1)
+    let invalidJobs = 0
+
+    for (let currentJob = 0; currentJob < keys.length; currentJob++) {
+        const data = await db.get(keys[currentJob])
+        const job = JSON.parse(data)
+        if (!job.userName || !job.taskAmount || !job.averageTaskCPI || ! job.averageTaskDuration || !job.submitionTime ||!job.scheduleTime || !job.finishTime) {
+            invalidJobs++
+            await db.del(keys[currentJob])
+
+        }
+        jobBar.update(currentJob + 1, { invalidJobs: invalidJobs })
+    }
+    jobBar.stop()
+    return 0
+}
+
 
 function writeToLogFileIfEnabled(message, verbose) {
     if (!verbose) return
@@ -118,16 +147,17 @@ async function writeConvertedCsv(outputPath, processorFrequency=3.6) {
     for (let currentJob = 0; currentJob < keys.length; currentJob++) {
         const data = await db.get(keys[currentJob])
         const job = JSON.parse(data)
-        line = `${job.userName || ''},${job.id || ''},${job.taskAmount ||''},${job.averageTaskCPI && job.averageTaskDuration ? Math.round(processorFrequency / job.averageTaskCPI * job.averageTaskDuration) : '' },${job.averageTaskDuration || ''},${job.averageTaskDiskSpace || ''},${job.averageTaskRam || ''},${job.averageTaskCpuUsage},${job.averageTaskCpuCores || ''},${job.schedulingClass || ''},${job.submitionTime || ''},${job.scheduleTime || ''},${job.finishTime || ''},${job.executionAttempts || ''},${job.evictionNumber || ''}\n`
+        line = `${job.userName || ''},${keys[currentJob] || ''},${job.taskAmount ||''},${job.averageTaskCPI && job.averageTaskDuration ? Math.round(processorFrequency / job.averageTaskCPI * job.averageTaskDuration) : '' },${job.averageTaskDuration || ''},${job.averageTaskDiskSpace || ''},${job.averageTaskRam || ''},${job.averageTaskCpuUsage},${job.averageTaskCpuCores || ''},${job.schedulingClass || ''},${job.submitionTime || ''},${job.scheduleTime || ''},${job.finishTime || ''},${job.executionAttempts || ''},${job.evictionNumber || ''}\n`
         appendFileSync(outputPath + 'converted.csv', line)
         jobBar.increment()
     }
+    return 0
 }
 
 async function cleanInvalidJobs() {
     const keys = await db.keys().all()
     const jobBar = new cliProgress.SingleBar({
-        format: 'Searching for invalid jobs |' + colors.cyan('{bar}') + '| {percentage}% || {value}/{total} || invalid jobs: {invalidJobs}'
+        format: 'Searching for invalid jobs before reading task data |' + colors.cyan('{bar}') + '| {percentage}% || {value}/{total} || invalid jobs: {invalidJobs}'
     }, cliProgress.Presets.shades_classic);
     jobBar.start(keys.length, 1)
     let invalidJobs = 0
@@ -143,7 +173,9 @@ async function cleanInvalidJobs() {
         jobBar.update(currentJob + 1, { invalidJobs: invalidJobs })
     }
     jobBar.stop()
+    return 0
 }
+
 
 
 async function readJobFiles(googleTracePath, initialJobFile, enableLog, maxFiles) {
@@ -257,6 +289,7 @@ async function readJobFiles(googleTracePath, initialJobFile, enableLog, maxFiles
         multibar.remove(jobBar)
     }
     fileBar.stop()
+    return 0
 }
 
 async function readTaskFiles(googleTracePath, initialTaskFile, enableLog, maxFiles) {
@@ -361,7 +394,7 @@ async function readTaskFiles(googleTracePath, initialTaskFile, enableLog, maxFil
         multibar.remove(taskBar)
     }
     fileBar.stop()
-    return
+    return 0
 }
 
 async function readTaskUsage(googleTracePath, initialUsageFile, enableLog, maxFiles) {
